@@ -13,7 +13,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          buildInputs = [ pkgs.cmake ];
+          buildInputs = [ pkgs.cmake pkgs.python3 ];
         };
       });
 }

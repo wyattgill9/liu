@@ -10,13 +10,15 @@
 #include <fstream>
 #include <cctype>
 #include <cmath>
+#include <unordered_set>
+#include <chrono>
+
+#include <simdjson.h>
+// using namespace simdjson;
 
 double round_to_two_decimals(double value) {
     return std::round(value * 10) / 10;
 }
-
-#include <simdjson.h>
-// using namespace simdjson;
 
 enum Error {
     LAYOUT_PARSE_ERROR_INVALID_FILE,
@@ -71,10 +73,11 @@ struct KeyboardLayout {
     std::string name;
     std::unordered_map<char, Key> char_to_key;
     std::array<std::array<Key, 10>, 4> matrix; 
- 
+    std::unordered_set<char> valid_keys; 
+
     // better printing with matrix instead of reverse hashmap lookup
     void print() {
-        std::cout << name << ":\n";
+        std::cout << name << "\n";
         for(int row = 0; row < 4; row++) {
             // left 
             for(int col = 0; col < 5; col++) {
@@ -113,12 +116,17 @@ struct KeyboardLayout {
 };
 
 struct CorpusData {
+    std::string corpus_name; 
+    
     std::unordered_map<char, int> monogram_counts;
     std::unordered_map<std::string, int> bigram_counts;
     std::unordered_map<std::string, int> trigram_counts;
 };
 
+// all percentages
 struct LayoutStats {
+    std::string corpus_name;
+
     double alternate = 0.0;
 
     double roll_in = 0.0;
@@ -137,6 +145,26 @@ struct LayoutStats {
 
     double left_hand = 0.0;
     double right_hand = 0.0;
+   
+    // MT-QUOTES:
+    //   Alt: 32.84%
+    //   Rol: 41.57%   (In/Out: 18.08% | 23.49%)
+    //   One:  3.37%   (In/Out:  1.87% |  1.50%)
+    //   Rtl: 44.94%   (In/Out: 19.95% | 25.00%)
+    //   Red:  4.26%   (Bad:     0.25%)
+    //
+    //   SFB:  1.02%
+    //   SFS:  5.44%   (Red/Alt: 1.22% | 4.22%)
+    //
+    //   LH/RH: 45.40% | 54.60%
+
+    void print() {
+        std::cout << corpus_name << ":\n";  
+
+        std::cout << "  SFB: " << round_to_two_decimals(sfb) << "%\n";
+        std::cout << "  LH/RH: " << round_to_two_decimals(right_hand) << "% | " << round_to_two_decimals(left_hand) << "%\n";
+    }
+
 };
 
 std::unordered_map<std::tuple<Finger, Finger, Finger>, std::string> trigram_table;
@@ -228,7 +256,14 @@ std::expected<KeyboardLayout, Error> load_layout(const std::string& file) {
     layout.char_to_key[' '] = left_space;
     layout.matrix[3][4] = left_space;
     layout.matrix[3][5] = right_space;
+
+    std::unordered_set<char> valid_keys;
+    for(const auto& [key, value] : layout.char_to_key) {
+        valid_keys.insert(value.value);
+    }
     
+    layout.valid_keys = valid_keys;
+
 
     return layout;
 }
@@ -313,7 +348,7 @@ void parse_ngram_counts(const simdjson::padded_string& json_data, std::unordered
 }
 
 // FOR MONOGRAMS CRAPPY FIX
-void parse_ngram_counts(const simdjson::padded_string& json_data, std::unordered_map<char, int>& map, int ngram_length) {
+void parse_monogram_counts(const simdjson::padded_string& json_data, std::unordered_map<char, int>& map) {
     simdjson::ondemand::parser parser;
     auto doc = parser.iterate(json_data);
     
@@ -329,9 +364,12 @@ void parse_ngram_counts(const simdjson::padded_string& json_data, std::unordered
 
 void load_corpus(CorpusData& data, const std::string_view& corpus) {
     simdjson::padded_string monogram_json, bigram_json, trigram_json; 
-     
+    
+    data.corpus_name = std::string(corpus);
+    std::transform(data.corpus_name.begin(), data.corpus_name.end(), data.corpus_name.begin(), ::toupper);
+
     if(load_json_file(get_path(corpus, "/monograms"), monogram_json)) {
-        parse_ngram_counts(monogram_json, data.monogram_counts, 1);
+        parse_monogram_counts(monogram_json, data.monogram_counts);
     }
 
     if (load_json_file(get_path(corpus, "/bigrams"), bigram_json)) {
@@ -409,30 +447,74 @@ std::pair<std::unordered_map<Finger, double>, double> finger_usage(const Keyboar
     return std::pair(fingers, right_hand);
 }
 
-LayoutStats get_stats(const KeyboardLayout& layout) {
+double sfb_bigrams(const KeyboardLayout& layout, const CorpusData& data) {
+    double counts = 0; 
+     
+   // constexpr this the total numberof values in the map some/optimize later 
+   double total_bigrams = 0; 
+
+    for(const auto& [gram, count] : data.bigram_counts) {
+        total_bigrams += count;
+
+        std::string gram_str(gram);
+        std::transform(gram_str.begin(), gram_str.end(), gram_str.begin(), ::tolower);
+        
+        // if the bigram contains a key that the keyboard does not have, skip it 
+        if(std::any_of(gram_str.begin(), gram_str.end(), 
+                       [&](char c) { return layout.valid_keys.find(c) == layout.valid_keys.end(); })) {
+            continue;
+        }
+        
+        // if its a space or a repeat, skip it
+        if(gram_str.find(' ') != std::string::npos || gram_str[0] == gram_str[1]) {
+            continue;
+        }
+
+        if(layout.char_to_key.find(gram_str[0])->second.finger == layout.char_to_key.find(gram_str[1])->second.finger) {
+            counts += count;
+        }
+    }
+    
+    return (counts/total_bigrams) * 100;
+}
+
+LayoutStats get_stats(const KeyboardLayout& layout, const CorpusData& data) {
     LayoutStats stats;
+    
+    stats.corpus_name = data.corpus_name;
+
+    // technicaly were also returning useless crap (the finger -> % map, but i think ill use it latter idk)
+    stats.right_hand = finger_usage(layout, data).second;
+    stats.left_hand = 100 - stats.right_hand;
+
+    stats.sfb = sfb_bigrams(layout, data);
 
     return stats; 
 }
 
+// print_map(data.monogram_counts, "Monograms");
+// print_map(data.bigram_counts, "Bigrams");
+// print_map(data.trigram_counts, "Trigrams");
+// print_trigram_table();
+
 int main() {
     CorpusData data;
-    load_trigram_table();
-    load_corpus(data, "mt-quotes");
-
-    // print_map(data.monogram_counts, "Monograms");
-    // print_map(data.bigram_counts, "Bigrams");
-    // print_map(data.trigram_counts, "Trigrams");
-    // print_trigram_table();
-
-    auto layout = load_layout("semimak");    
-    layout->print();
-
-    auto usage = finger_usage(*layout, data);
-    double right_hand = usage.second;
-    double left_hand = 100 - right_hand;
     
-    std::cout << "LH/RH: " << round_to_two_decimals(right_hand) << "% | " << round_to_two_decimals(left_hand) << "%\n";
+    load_corpus(data, "mt-quotes");
+    load_trigram_table();
+    
+    auto now = std::chrono::high_resolution_clock::now();
+    
+    auto layout = load_layout("semimak");    
+    
+    LayoutStats stats = get_stats(*layout, data); 
+   
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - now);
 
+    layout->print();
+    stats.print();
+    
+    std::cout << "\n" << duration.count() << " ns\n";
     return 0;
 }
