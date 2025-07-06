@@ -8,12 +8,19 @@
 #include <optional>
 #include <expected>
 #include <fstream>
+#include <cctype>
+#include <cmath>
+
+double round_to_two_decimals(double value) {
+    return std::round(value * 10) / 10;
+}
 
 #include <simdjson.h>
 // using namespace simdjson;
 
 enum Error {
     LAYOUT_PARSE_ERROR_INVALID_FILE,
+    MONOGRAM_PARSE_ERROR_MONOGRAM_TO_SHORT, 
 };
 
 enum class Finger : std::uint8_t {
@@ -21,15 +28,17 @@ enum class Finger : std::uint8_t {
     LR = 1,
     LM = 2,
     LI = 3,
-    // LT = 4,
     
-    // RT = 5
-    RI = 4,
-    RM = 5,
-    RR = 6,
-    RP = 7,
-
-    // TB = 10;
+    LT = 4,  // Left thumb
+    
+    RT = 5,  // Right thumb
+    
+    RI = 6,
+    RM = 7,
+    RR = 8,
+    RP = 9,
+    
+    TB = 10, // Thumb (generic)
 };
 
 namespace std {
@@ -61,16 +70,20 @@ struct Key {
 struct KeyboardLayout {
     std::string name;
     std::unordered_map<char, Key> char_to_key;
-    std::array<std::array<Key, 10>, 3> matrix; 
+    std::array<std::array<Key, 10>, 4> matrix; 
  
     // better printing with matrix instead of reverse hashmap lookup
     void print() {
         std::cout << name << ":\n";
-        for(int row = 0; row < 3; row++) {
+        for(int row = 0; row < 4; row++) {
             // left 
             for(int col = 0; col < 5; col++) {
                 if(matrix[row][col].value != '\0') {
-                    std::cout << matrix[row][col].value;
+                    if (matrix[row][col].value != ' ') [[likely]] {
+                        std::cout << matrix[row][col].value; 
+                    } else [[unlikely]] {
+                        std::cout << "_"; 
+                    } 
                 } else {
                     std::cout << " ";
                 }
@@ -82,7 +95,11 @@ struct KeyboardLayout {
             // right
             for(int col = 5; col < 10; col++) {
                 if(matrix[row][col].value != '\0') {
-                    std::cout << matrix[row][col].value;
+                    if (matrix[row][col].value != ' ') [[likely]] {
+                        std::cout << matrix[row][col].value;
+                    } else [[unlikely]] {
+                        std::cout << "_";
+                    } 
                 } else {
                     std::cout << " ";
                 }
@@ -91,11 +108,12 @@ struct KeyboardLayout {
             
             std::cout << "\n";
         }
+        std::cout << "\n"; 
     }
 };
 
 struct CorpusData {
-    std::unordered_map<std::string, int> monogram_counts;
+    std::unordered_map<char, int> monogram_counts;
     std::unordered_map<std::string, int> bigram_counts;
     std::unordered_map<std::string, int> trigram_counts;
 };
@@ -203,7 +221,15 @@ std::expected<KeyboardLayout, Error> load_layout(const std::string& file) {
         
         row++;
     }
+
+    Key left_space = Key { ' ', 3, 4, Finger::LT, Hand::LEFT };
+    Key right_space = Key { ' ', 3, 5, Finger::RT, Hand::RIGHT };
     
+    layout.char_to_key[' '] = left_space;
+    layout.matrix[3][4] = left_space;
+    layout.matrix[3][5] = right_space;
+    
+
     return layout;
 }
 
@@ -226,17 +252,18 @@ Finger string_to_finger(const std::string& finger_str) {
     if (finger_str == "LR") return Finger::LR;
     if (finger_str == "LM") return Finger::LM;
     if (finger_str == "LI") return Finger::LI;
-    // if (finger_str == "LT") return Finger::LT; // not adding thumbs yet
+    if (finger_str == "LT") return Finger::LT; // Left thumb
+    if (finger_str == "RT") return Finger::RT; // Right thumb
     if (finger_str == "RI") return Finger::RI;
-    // if (finger_str == "RT") return Finger::RT; 
     if (finger_str == "RM") return Finger::RM;
     if (finger_str == "RR") return Finger::RR;
     if (finger_str == "RP") return Finger::RP;
-    // if (finger_str == "TB") return Finger::TB; 
+    if (finger_str == "TB") return Finger::TB; // TB generic
     
-    return Finger::LI; // fallback
+    return Finger::LI;
 }
 
+// TODO: Make this actualy work
 void parse_trigram_table(const simdjson::padded_string& json_data) {
     simdjson::ondemand::parser parser;
     auto doc = parser.iterate(json_data);
@@ -248,7 +275,11 @@ void parse_trigram_table(const simdjson::padded_string& json_data) {
         std::string key_str(key);
         std::string value_str(value);
 
-        std::array<std::string, 3> finger_codes = {key_str.substr(0, 2), key_str.substr(2, 2), key_str.substr(4, 2)};
+        std::array<std::string, 3> finger_codes = {
+            key_str.substr(0, 2),   // First finger
+            key_str.substr(3, 2),   // Second finger (skip the "-")
+            key_str.substr(6, 2)    // Third finger (skip the "-")
+        };
         
         Finger finger1 = string_to_finger(finger_codes[0]);
         Finger finger2 = string_to_finger(finger_codes[1]);
@@ -258,7 +289,7 @@ void parse_trigram_table(const simdjson::padded_string& json_data) {
     }
 }
 
-void load_trigram_table(const std::string_view& filename) {
+void load_trigram_table() {
     simdjson::padded_string json;
     if(load_json_file(get_path("", "trigram_table"), json)) {
         parse_trigram_table(json);
@@ -278,6 +309,21 @@ void parse_ngram_counts(const simdjson::padded_string& json_data, std::unordered
         if(key_str.length() == ngram_length) {
             map[key_str] = value;
         } 
+    }
+}
+
+// FOR MONOGRAMS CRAPPY FIX
+void parse_ngram_counts(const simdjson::padded_string& json_data, std::unordered_map<char, int>& map, int ngram_length) {
+    simdjson::ondemand::parser parser;
+    auto doc = parser.iterate(json_data);
+    
+    for (auto field : doc.get_object()) {
+        std::string_view key = field.unescaped_key();
+        int value = field.value().get_int64();
+        
+        // convert string_view to string to compare
+        char key_char = key[0];
+        map[key_char] = value;
     }
 }
 
@@ -315,19 +361,78 @@ void print_trigram_table() {
     std::cout << "\n";
 }
 
+std::pair<std::unordered_map<Finger, double>, double> finger_usage(const KeyboardLayout& layout, const CorpusData& data) {
+    std::unordered_map<Finger, double> fingers;
+    
+    for(const auto& [gram, count] : data.monogram_counts) {
+        
+        char gram_char = std::tolower(gram); 
+
+        if(!layout.char_to_key.contains(gram_char)) {
+            continue; 
+        }
+        
+        Finger finger = layout.char_to_key.find(gram_char)->second.finger;
+        
+        if(!fingers.contains(finger)) {
+            fingers[finger] = 0;
+        }
+
+        fingers[finger] += count;
+    }
+
+    double total = 0;
+    for(auto& [finger, count] : fingers) {
+        total += count;
+    }
+    
+    double right_hand = 0;
+
+    for(auto& [finger, usage] : fingers) {
+        usage /= total; // normalize numbers in map -> % 
+    
+        switch(finger) { // if its a right hand or thumb, we add it to the right hand total, else we will just 100 - right_hand to get left
+            case Finger::RT:
+            case Finger::RI:
+            case Finger::RM:
+            case Finger::RR:
+            case Finger::RP:
+            case Finger::TB: // TB generic - subjective 
+                right_hand += usage;
+                break;
+            default:
+                break;
+        }
+    }
+    right_hand *= 100;
+
+    return std::pair(fingers, right_hand);
+}
+
+LayoutStats get_stats(const KeyboardLayout& layout) {
+    LayoutStats stats;
+
+    return stats; 
+}
+
 int main() {
     CorpusData data;
+    load_trigram_table();
     load_corpus(data, "mt-quotes");
-    load_trigram_table("mt-quotes");
 
-    print_map(data.monogram_counts, "Monograms");
-    print_map(data.bigram_counts, "Bigrams");
-    print_map(data.trigram_counts, "Trigrams");
-    print_trigram_table();
+    // print_map(data.monogram_counts, "Monograms");
+    // print_map(data.bigram_counts, "Bigrams");
+    // print_map(data.trigram_counts, "Trigrams");
+    // print_trigram_table();
 
     auto layout = load_layout("semimak");    
-    if(layout.has_value()) {
-        layout->print(); 
-    }
+    layout->print();
+
+    auto usage = finger_usage(*layout, data);
+    double right_hand = usage.second;
+    double left_hand = 100 - right_hand;
+    
+    std::cout << "LH/RH: " << round_to_two_decimals(right_hand) << "% | " << round_to_two_decimals(left_hand) << "%\n";
+
     return 0;
 }
