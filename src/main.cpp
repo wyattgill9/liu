@@ -12,6 +12,7 @@
 #include <cmath>
 #include <unordered_set>
 #include <chrono>
+#include <set>
 
 #include <simdjson.h>
 // using namespace simdjson;
@@ -159,15 +160,40 @@ struct LayoutStats {
     //   LH/RH: 45.40% | 54.60%
 
     void print() {
-        std::cout << corpus_name << ":\n";  
-
+        std::cout << corpus_name << ":\n";
+        
+        std::cout << "  Alt: " << round_to_two_decimals(alternate) << "%\n";
+        
+        double total_roll = roll_in + roll_out;
+        std::cout << "  Rol: " << round_to_two_decimals(total_roll) << "%   (In/Out: " 
+                  << round_to_two_decimals(roll_in) << "% | " << round_to_two_decimals(roll_out) << "%)\n";
+        
+        double total_oneh = oneh_in + oneh_out;
+        std::cout << "  One: " << round_to_two_decimals(total_oneh) << "%   (In/Out: " 
+                  << round_to_two_decimals(oneh_in) << "% | " << round_to_two_decimals(oneh_out) << "%)\n";
+        
+        double total_rtl = total_roll + total_oneh; // Rtl = Roll + One-hand
+        std::cout << "  Rtl: " << round_to_two_decimals(total_rtl) << "%   (In/Out: " 
+                  << round_to_two_decimals(roll_in + oneh_in) << "% | " 
+                  << round_to_two_decimals(roll_out + oneh_out) << "%)\n";
+        
+        std::cout << "  Red: " << round_to_two_decimals(redirect) << "%   (Bad: " 
+                  << round_to_two_decimals(bad_redirect) << "%)\n";
+        
+        std::cout << "\n";
         std::cout << "  SFB: " << round_to_two_decimals(sfb) << "%\n";
-        std::cout << "  LH/RH: " << round_to_two_decimals(right_hand) << "% | " << round_to_two_decimals(left_hand) << "%\n";
+        
+        double total_sfs = dsfb_red + dsfb_alt;
+        std::cout << "  SFS: " << round_to_two_decimals(total_sfs) << "%   (Red/Alt: " 
+                  << round_to_two_decimals(dsfb_red) << "% | " << round_to_two_decimals(dsfb_alt) << "%)\n";
+        
+        std::cout << "\n";
+        std::cout << "  LH/RH: " << round_to_two_decimals(left_hand) << "% | " 
+                  << round_to_two_decimals(right_hand) << "%\n";
     }
-
 };
 
-std::unordered_map<std::tuple<Finger, Finger, Finger>, std::string> trigram_table;
+std::unordered_map<std::tuple<Finger, Finger, Finger>, std::string> combo_table;
 
 Finger get_finger(int col, Hand hand) {
     if(hand == Hand::LEFT) {
@@ -299,7 +325,7 @@ Finger string_to_finger(const std::string& finger_str) {
 }
 
 // TODO: Make this actualy work
-void parse_trigram_table(const simdjson::padded_string& json_data) {
+void parse_combo_table(const simdjson::padded_string& json_data) {
     simdjson::ondemand::parser parser;
     auto doc = parser.iterate(json_data);
 
@@ -309,7 +335,7 @@ void parse_trigram_table(const simdjson::padded_string& json_data) {
         
         std::string key_str(key);
         std::string value_str(value);
-
+        
         std::array<std::string, 3> finger_codes = {
             key_str.substr(0, 2),   // First finger
             key_str.substr(3, 2),   // Second finger (skip the "-")
@@ -320,14 +346,14 @@ void parse_trigram_table(const simdjson::padded_string& json_data) {
         Finger finger2 = string_to_finger(finger_codes[1]);
         Finger finger3 = string_to_finger(finger_codes[2]);
         
-        trigram_table[std::make_tuple(finger1, finger2, finger3)] = value_str;
+        combo_table[std::make_tuple(finger1, finger2, finger3)] = value_str;
     }
 }
 
-void load_trigram_table() {
+void load_combo_table() {
     simdjson::padded_string json;
-    if(load_json_file(get_path("", "trigram_table"), json)) {
-        parse_trigram_table(json);
+    if(load_json_file(get_path("", "combo_table"), json)) {
+        parse_combo_table(json);
     }
 }
 
@@ -389,9 +415,9 @@ void print_map(const std::unordered_map<std::string, int>& map, const std::strin
     std::cout << "\n";
 }
 
-void print_trigram_table() {
-    std::cout << "Trigram table (" << trigram_table.size() << " entries):\n";
-    for(const auto& [key, value] : trigram_table) {
+void print_combo_table() {
+    std::cout << "Combo table (" << combo_table.size() << " entries):\n";
+    for(const auto& [key, value] : combo_table) {
         std::cout << "(" << static_cast<int>(std::get<0>(key)) << "," 
                   << static_cast<int>(std::get<1>(key)) << "," 
                   << static_cast<int>(std::get<2>(key)) << "): " << value << "\n";
@@ -399,7 +425,7 @@ void print_trigram_table() {
     std::cout << "\n";
 }
 
-std::pair<std::unordered_map<Finger, double>, double> finger_usage(const KeyboardLayout& layout, const CorpusData& data) {
+std::pair<std::unordered_map<Finger, double>, double> get_usage(const KeyboardLayout& layout, const CorpusData& data) {
     std::unordered_map<Finger, double> fingers;
     
     for(const auto& [gram, count] : data.monogram_counts) {
@@ -447,7 +473,7 @@ std::pair<std::unordered_map<Finger, double>, double> finger_usage(const Keyboar
     return std::pair(fingers, right_hand);
 }
 
-double sfb_bigrams(const KeyboardLayout& layout, const CorpusData& data) {
+double get_sfb(const KeyboardLayout& layout, const CorpusData& data) {
     double counts = 0; 
      
    // constexpr this the total numberof values in the map some/optimize later 
@@ -478,30 +504,156 @@ double sfb_bigrams(const KeyboardLayout& layout, const CorpusData& data) {
     return (counts/total_bigrams) * 100;
 }
 
+double get_trigram_combos(const KeyboardLayout& layout, const CorpusData& data) {
+    double sft_counts = 0; 
+    double total_trigrams = 0; 
+
+    for(const auto& [gram, count] : data.trigram_counts) {
+        total_trigrams += count;
+
+        std::string gram_str(gram);
+        std::transform(gram_str.begin(), gram_str.end(), gram_str.begin(), ::tolower);
+
+        if(gram_str.find(' ') != std::string::npos) {
+            continue;
+        }
+
+        if(std::any_of(gram_str.begin(), gram_str.end(), 
+                       [&](char c) { return layout.valid_keys.find(c) == layout.valid_keys.end(); })) {
+            continue;
+        }
+        // for sft 
+        Finger finger1 = layout.char_to_key.find(gram_str[0])->second.finger;
+        Finger finger2 = layout.char_to_key.find(gram_str[1])->second.finger;
+        Finger finger3 = layout.char_to_key.find(gram_str[2])->second.finger;
+
+        if(finger1 == finger2 || finger2 == finger3 || finger1 == finger3) {
+            sft_counts += count;
+        }
+
+        // other data
+        if(finger1 == Finger::TB) finger1 = Finger::RT;
+        if(finger2 == Finger::TB) finger2 = Finger::RT;
+        if(finger3 == Finger::TB) finger3 = Finger::RT;
+
+        auto finger_combo = std::make_tuple(finger1, finger2, finger3);
+
+        std::string gram_type = "";
+        if(combo_table.contains(finger_combo)) {
+            gram_type = combo_table[finger_combo]; 
+        }
+    }
+
+    return (sft_counts / total_trigrams) * 100;
+}
+
 LayoutStats get_stats(const KeyboardLayout& layout, const CorpusData& data) {
     LayoutStats stats;
-    
     stats.corpus_name = data.corpus_name;
 
-    // technicaly were also returning useless crap (the finger -> % map, but i think ill use it latter idk)
-    stats.right_hand = finger_usage(layout, data).second;
+    // usage
+    auto [finger_usage, right_hand_usage] = get_usage(layout, data);
+    stats.right_hand = right_hand_usage;
     stats.left_hand = 100 - stats.right_hand;
 
-    stats.sfb = sfb_bigrams(layout, data);
+    stats.sfb = get_sfb(layout, data);
 
-    return stats; 
+    // analysis crodie
+    double total_trigrams = 0;
+    double alternate_count = 0;
+    double roll_in_count = 0;
+    double roll_out_count = 0;
+    double oneh_in_count = 0;
+    double oneh_out_count = 0;
+    double redirect_count = 0;
+    double bad_redirect_count = 0;
+    double dsfb_red_count = 0;
+    double dsfb_alt_count = 0;
+
+    for(const auto& [gram, count] : data.trigram_counts) {
+        total_trigrams += count;
+
+        std::string gram_str(gram);
+        std::transform(gram_str.begin(), gram_str.end(), gram_str.begin(), ::tolower);
+
+        if(gram_str.find(' ') != std::string::npos) {
+            continue;
+        }
+
+        if(std::any_of(gram_str.begin(), gram_str.end(), 
+                       [&](char c) { return layout.valid_keys.find(c) == layout.valid_keys.end(); })) {
+            continue;
+        }
+
+        Finger finger1 = layout.char_to_key.find(gram_str[0])->second.finger;
+        Finger finger2 = layout.char_to_key.find(gram_str[1])->second.finger;
+        Finger finger3 = layout.char_to_key.find(gram_str[2])->second.finger;
+
+        Finger lookup_finger1 = (finger1 == Finger::TB) ? Finger::RT : finger1;
+        Finger lookup_finger2 = (finger2 == Finger::TB) ? Finger::RT : finger2;
+        Finger lookup_finger3 = (finger3 == Finger::TB) ? Finger::RT : finger3;
+
+        auto finger_combo = std::make_tuple(lookup_finger1, lookup_finger2, lookup_finger3);
+
+        std::string combo_type = "";
+        if(combo_table.contains(finger_combo)) {
+            combo_type = combo_table[finger_combo];
+        }
+
+        if(combo_type == "alternate") {
+            alternate_count += count;
+        }
+        else if(combo_type == "roll-in") {
+            roll_in_count += count;
+        }
+        else if(combo_type == "roll-out") {
+            roll_out_count += count;
+        }
+        else if(combo_type == "oneh-in") {
+            oneh_in_count += count;
+        }
+        else if(combo_type == "oneh-out") {
+            oneh_out_count += count;
+        }
+        else if(combo_type == "redirect") {
+            redirect_count += count;
+        }
+        else if(combo_type == "bad-redirect") {
+            bad_redirect_count += count;
+        }
+        else if(combo_type == "dsfb-red") {
+            dsfb_red_count += count;
+        }
+        else if(combo_type == "dsfb-alt") {
+            dsfb_alt_count += count;
+        }
+    }
+
+    if(total_trigrams > 0) {
+        stats.alternate = (alternate_count / total_trigrams) * 100;
+        stats.roll_in = (roll_in_count / total_trigrams) * 100;
+        stats.roll_out = (roll_out_count / total_trigrams) * 100;
+        stats.oneh_in = (oneh_in_count / total_trigrams) * 100;
+        stats.oneh_out = (oneh_out_count / total_trigrams) * 100;
+        stats.redirect = (redirect_count / total_trigrams) * 100;
+        stats.bad_redirect = (bad_redirect_count / total_trigrams) * 100;
+        stats.dsfb_red = (dsfb_red_count / total_trigrams) * 100;
+        stats.dsfb_alt = (dsfb_alt_count / total_trigrams) * 100;
+    }
+
+    return stats;
 }
 
 // print_map(data.monogram_counts, "Monograms");
 // print_map(data.bigram_counts, "Bigrams");
 // print_map(data.trigram_counts, "Trigrams");
-// print_trigram_table();
+// print_combo_table();
 
 int main() {
     CorpusData data;
     
     load_corpus(data, "mt-quotes");
-    load_trigram_table();
+    load_combo_table();
     
     auto now = std::chrono::high_resolution_clock::now();
     
@@ -511,7 +663,6 @@ int main() {
    
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - now);
-
     layout->print();
     stats.print();
     
