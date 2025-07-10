@@ -1,16 +1,16 @@
 Semimak
   f l h v z  |  q w u o y  
-  s r n t k  |  c d e a i ;
+  s r n t k  |  c d e a i
   x ' b m j  |  p g , . /  
 
 MT-QUOTES:
-  Alt: 32.84%
-  Rol: 41.57%   (In/Out: 18.08% | 23.49%)
-  One:  3.37%   (In/Out:  1.87% |  1.50%)
-  Rtl: 44.94%   (In/Out: 19.95% | 25.00%)
+  Alt: 32.81%
+  Rol: 41.54%   (In/Out: 18.08% | 23.46%)
+  One:  3.36%   (In/Out:  1.87% |  1.50%)
+  Rtl: 44.90%   (In/Out: 19.94% | 24.96%)
   Red:  4.26%   (Bad:     0.25%)
 
   SFB:  1.02%
-  SFS:  5.44%   (Red/Alt: 1.22% | 4.22%)
+  SFS:  5.43%   (Red/Alt: 1.22% | 4.21%)
 
-  LH/RH: 45.40% | 54.60%
+  LH/RH: 45.43% | 54.57%
