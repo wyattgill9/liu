@@ -64,29 +64,30 @@ struct KeyboardLayout {
             }
             std::cout << "\n";
         }
-        std::cout << score;
+        // std::cout << "Score:" << score;
     }
 };
 
 Finger get_finger(int col, Hand hand) {
     if (hand == Hand::LEFT) {
         switch (col) {
-            case 0: return Finger::LP;
-            case 1: return Finger::LR;
-            case 2: return Finger::LM;
-            case 3:
-            case 4: return Finger::LI;
+            case 0: return Finger::LP;  // q, a, z
+            case 1: return Finger::LR;  // w, s, x
+            case 2: return Finger::LM;  // e, d, c
+            case 3: return Finger::LI;  // r, f, v
+            case 4: return Finger::LI;  // t, g, b (index finger handles two columns)
+            default: return Finger::LI;
         }
     } else {
         switch (col) {
-            case 0: return Finger::RP;
-            case 1: return Finger::RR;
-            case 2: return Finger::RM;
-            case 3:
-            case 4: return Finger::RI;
+            case 0: return Finger::RI;  // y, h, n (right index handles two columns)
+            case 1: return Finger::RI;  // u, j, m
+            case 2: return Finger::RM;  // i, k, comma
+            case 3: return Finger::RR;  // o, l, period
+            case 4: return Finger::RP;  // p, semicolon, slash
+            default: return Finger::RI;
         }
     }
-    return Finger::LI;
 }
 
 std::expected<KeyboardLayout, Error> load_layout(const std::string &file) {
@@ -160,53 +161,56 @@ std::expected<KeyboardLayout, Error> load_layout(const std::string &file) {
 void get_stats(KeyboardLayout &layout) {
     constexpr double SFB_WEIGHT = 1;
     constexpr double SFS_WEIGHT = 1;
-
+    
     int sfb = 0;
     int total_bigram_count = 0; 
     
     int sfs = 0;
+    int total_sfs_count = 0; 
 
-    // for (std::size_t i = 0; i < mt_quotes.size(); i++) {
-    //     char first = std::tolower(static_cast<char>(mt_quotes[i]));
-    //     char second = std::tolower(static_cast<char>(mt_quotes[i + 1]));
-    //
-    //     if (layout.valid_keys.find(first) == layout.valid_keys.end() ||
-    //         layout.valid_keys.find(second) == layout.valid_keys.end())
-    //         continue;
-    //
-    //     if(first == ' ' || second == ' ') continue;
-    //     if(first == second) continue;
-    //
-    //     if(layout.char_to_key.find(first)->second.finger == layout.char_to_key.find(second)->second.finger)
-    //         sfb++;
-    // }
+    for (std::size_t i = 0; i < mt_quotes.size() - 1; i++) { 
+
+        char first = std::tolower(static_cast<char>(mt_quotes[i]));
+        char second = std::tolower(static_cast<char>(mt_quotes[i + 1]));
+
+        if (layout.valid_keys.find(first) == layout.valid_keys.end() ||
+            layout.valid_keys.find(second) == layout.valid_keys.end())
+            continue;
+
+        if(first == ' ' || second == ' ') continue;
+        if(first == second) continue;
+        
+        total_bigram_count++;
+
+        if(layout.char_to_key.find(first)->second.finger == layout.char_to_key.find(second)->second.finger) { 
+            sfb++;
+        } 
+    }
+
+    double sfb_score = ((sfb * 100) / total_bigram_count); 
+    std::cout << "SFB: " << sfb_score << "%\n"; 
+    double sfs_score = ((sfs * 100) / total_sfs_count);
     
-    // size_t idx = 0; 
-    // std::for_each(std::execution::parallel_unsequenced_policy, mt_quotes.begin(), mt_quotes.end() - 1,
-    //
-    //     [&](const auto&) {
-    //         char first = std::tolower(static_cast<char>(mt_quotes[i]));
-    //         char second = std::tolower(static_cast<char>(mt_quotes[i + 1]));
-    //
-    //         if (layout.valid_keys.find(first) == layout.valid_keys.end() ||
-    //             layout.valid_keys.find(second) == layout.valid_keys.end())
-    //             return;
-    //
-    //         if(first == ' ' || second == ' ') return;
-    //         if(first == second) return;
-    //
-    //         if(layout.char_to_key.find(first)->second.finger == layout.char_to_key.find(second)->second.finger)
-    //             sfb++;
-    // });
-
-
-    double score = (sfb * SFB_WEIGHT) + (sfs * SFS_WEIGHT);
+    double score = sfb_score + sfs_score; 
     layout.score = score;
 }
 
+void debug_finger_assignments(const KeyboardLayout &layout) {
+    std::cout << "Finger assignments:\n";
+    for (const auto &[ch, key] : layout.char_to_key) {
+        if (ch != ' ') {
+            std::cout << "'" << ch << "' -> finger " << static_cast<int>(key.finger) 
+                      << " (row=" << key.row << ", col=" << key.column << ")\n";
+        }
+    }
+    std::cout << "\n";
+}
+
 int main() {
-    auto layout = load_layout("semimak");
+    auto layout = load_layout("qwerty");
     
+    // debug_finger_assignments(*layout);
+
     auto now = std::chrono::high_resolution_clock::now(); 
     get_stats(*layout);
     auto end = std::chrono::high_resolution_clock::now();
