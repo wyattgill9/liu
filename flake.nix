@@ -13,7 +13,7 @@
       in
       {
         devShells.default = pkgs.mkShell {
-          buildInputs = [ pkgs.cmake pkgs.scc ];
+          buildInputs = [ pkgs.cmake pkgs.gdb pkgs.scc ];
         };
       });
 }
